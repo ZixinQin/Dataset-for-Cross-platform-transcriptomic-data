@@ -1,0 +1,121 @@
+#Data Collection
+ #For GEOdataset
+for i in `esearch -db gds -query GSE* | efetch -format docsum | xtract -pattern DocumentSummary -element FTPLink`; do wget $i/suppl/*.gz ; done
+ #For SRA raw data
+cat  SRR_Acc_List.txt
+ERR*
+SRR*
+nohup prefetch -O . $(<SRR_Acc_List.txt) & 
+#QC and trimmed
+for infile in SRR*
+do
+mkdir -p 02_trimmed
+
+TRIMMO_JAR_FILE='./Trimmomatic-0.38/trimmomatic-0.38.jar'
+TRIMMO_ADAPTOR_FILE_PE='./Trimmomatic-0.38/adapters/TruSeq3-PE.fa'
+
+
+R1=`ls ./*${infile}*_1*`
+R2=`ls ./*${infile}*_2*`
+
+java -jar $TRIMMO_JAR_FILE PE -threads 6 ${R1} ${R2} 02_trimmed/${infile}_clean.1.fq 02_trimmed/${infile}_clean_unpaired.1.fq 02_trimmed/${infile}_clean.2.fq 02_trimmed/${infile}_clean_unpaired.2.fq ILLUMINACLIP:$TRIMMO_ADAPTOR_FILE_PE:2:15:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:15:30 MINLEN:36
+done
+#kallisto
+for infile in SRR*
+do
+mkdir -p ${infile}
+Kallisto_FILE='./kallisto'
+Kallisto_FILE_INDEX='./kallistoworkshop/vibrio_cholerae_N16961.index'
+R1=`ls ./*${infile}_1.fastq`
+R2=`ls ./*${infile}_2.fastq`
+$Kallisto_FILE quant -i $Kallisto_FILE_INDEX -o ${infile} ${R1} ${R2}
+done
+#Count extraction
+cp /mnt/raid1/wuyingjian/biosoft/Miniconda3-py39_4.9.2-Linux-x86_64.sh ~
+sh ~/Miniconda3-py39_4.9.2-Linux-x86_64.sh 
+conda install R=3.6
+source /mnt/raid7/liulab/WholeRNAseq/package/miniconda/etc/profile.d/conda.sh
+conda activate base
+R
+version
+install.packages("BiocManager")
+BiocManager::install("tximport")
+options(BioC_mirror="https://mirrors.ustc.edu.cn/bioc/") 
+BiocManager::install("rhdf5")
+ls /mnt/raid7/liulab/WholeRNAseq/data/RNAseq/sraoutput/fastq/kallistoworkshop/kallistooutput/*/abundance.h5 > dir.txt
+head dir.txt
+cat dir.txt | wc -l
+library("tximport")
+library("rhdf5")
+samples=read.csv("dir.txt",header = F)
+head(samples)
+files=file.path(samples$V1)
+head(files)
+txi.kallisto <- tximport(files, type = "kallisto", txOut = TRUE)
+head(txi.kallisto$counts)
+cat tx2gene.txt| sed 's/\[\|\]//g' |awk '{for(i=1; i<=NF; i++){split($i, a, "="); b[a[1]]=a[2]}} {print $1,b["locus_tag"]}' > tx2gene.csv
+cat samples.txt | cut -d/ -f12 | cut -d_ -f1 > SRRid.txt
+tx2gene=read.csv("tx2gene.csv",header = F)
+txi.kallisto <- tximport(files, type = "kallisto", tx2gene = tx2gene, txOut = TRUE)
+head(txi.kallisto$counts)
+write.csv(txi.kallisto, file="./txikallisto.csv")
+write.csv(txi.kallisto$counts, file="./txikallistocounts.csv")
+options(BioC_mirror="https://mirrors.ustc.edu.cn/bioc/")
+BiocManager::install("limma")
+BiocManager::install("ggplot2")
+BiocManager::install("DESeq2")
+library("limma")
+library("ggplot2")
+library("DESeq2")
+#Limma-removebatch
+coldata <- read.table(file = "metadata.txt", sep = "\t", header = T, row.names = 1)
+cts <- read.table(file = "counttable.txt", sep = "\t", header = T, row.names = 1)
+rownames(metadata)=metadata[,1]
+metadata=metadata[,-1]
+coldata <- metadata
+normalcts <- limma::removeBatchEffect(cts, batch=coldata$batch)
+write.csv(cts, file="./cts.csv")
+write.csv(normalcts, file="./normalcts.csv")
+dim(cts)
+n.sample=ncol(cts)
+cols<-rainbow(n.sample*1.2)
+expression <- as.data.frame(cts)
+expression[,c(1:511)]<-as.numeric(unlist(expression[,c(1:511)]))
+boxplot(expression[,c(1:511)],col=cols,main="counts",las=2,outline=F)
+dim(normalcts)
+n.sample=ncol(normalcts)
+cols<-rainbow(n.sample*1.2)
+expression <- as.data.frame(normalcts)
+expression[,c(1:511)]<-as.numeric(unlist(expression[,c(1:511)]))
+boxplot(expression[,c(1:511)],col=cols,main="counts",las=2,outline=F)
+datcts=t(cts)
+datcts=as.data.frame(datcts)
+ctstsne_out <- Rtsne(datcts,pca=FALSE,perplexity=30,theta=0.0,check_duplicates = FALSE)
+df=as.data.frame(ctstsne_out$Y)
+colnames(df)=c("X",'Y')
+df$batch=(coldata$batch)
+df$group=(coldata$group)
+colnames(df) <- c("tSNE1", "tSNE2","batch","group")
+ggplot(df, aes(x = tSNE1, y = tSNE2))+ geom_point(aes(col=batch))
+datnormalcts=t(normalcts)
+datnormalcts=as.data.frame(datnormalcts)
+normalctstsne_out <- Rtsne(datnormalcts,pca=FALSE,perplexity=30,theta=0.0,check_duplicates = FALSE)
+normaldf=as.data.frame(normalctstsne_out$Y)
+colnames(normaldf)=c("X",'Y')
+normaldf$batch=(coldata$batch)
+normaldf$group=(coldata$group)
+colnames(normaldf) <- c("tSNE1", "tSNE2","batch","group")
+ggplot(normaldf, aes(x = tSNE1, y = tSNE2))+ geom_point(aes(col=batch))
+#Rank-in（Website：http://www.badd-cao.net/rank-in/index.html）
+#hCluster
+opt_tsne <- as.data.frame(normalctstsne_out$Y)
+head(opt_tsne)
+hc4<- hclust(dist(opt_tsne))
+plot(hc4,labels = FALSE)
+clus4 <-  cutree(hc4, 4)
+group_list4 <-  as.factor(clus4) 
+table(group_list4)
+tsnes2<-data.frame(opt_tsne)
+colnames(tsnes2) <- c("tSNE1", "tSNE2")
+tsnes2$group_hclust=group_list4
+#WGCNA （Package：https://github.com/ShawnWx2019/WGCNA-shinyApp/blob/main/WGCNAbyClick.v1.R）
